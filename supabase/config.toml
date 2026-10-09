@@ -1,0 +1,18 @@
+project_id = "fittrack"
+[auth]
+site_url = "fittrack://auth/callback"
+additional_redirect_urls = ["fittrack://auth/callback", "fittrack://reset-password", "http://localhost:8081/auth/callback", "http://localhost:8081/reset-password"]
+[functions.billing]
+verify_jwt = false
+[functions.stripe-webhook]
+verify_jwt = false
+[functions.delete-account]
+verify_jwt = false
+[functions.message-notification]
+verify_jwt = false
+
+[auth.email]
+enable_confirmations = false
+
+[functions.payment-redirect]
+verify_jwt = false
