@@ -1,3 +1,4 @@
+import { finishBackgroundSession } from "./services/backgroundTracking";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { Session } from "@supabase/supabase-js";
 import {
@@ -62,6 +63,12 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       });
     const { data } = supabase.auth.onAuthStateChange((event, next) => {
       if (event === "SIGNED_OUT") {
+        void finishBackgroundSession().catch((error) =>
+          console.warn(
+            "No se pudo detener el seguimiento al cerrar sesión",
+            error,
+          ),
+        );
         cache.clear();
         setRecovery(false);
       }

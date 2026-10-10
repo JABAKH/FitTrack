@@ -1,5 +1,6 @@
+import OpenStreetRouteMap from "./OpenStreetRouteMap";
 import React, { useEffect, useRef } from "react";
-import { View } from "react-native";
+import { View, Platform } from "react-native";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import { Label, palette } from "../ui";
 type RoutePoint = { latitude: number; longitude: number; timestamp?: number };
@@ -12,6 +13,7 @@ export default function RouteMap({ points }: { points: RoutePoint[] }) {
         animated: true,
       });
   }, [points]);
+  if (Platform.OS === "android") return <OpenStreetRouteMap points={points} />;
   if (!points.length)
     return (
       <View

@@ -1,7 +1,7 @@
 import Disclosure from "../../src/components/Disclosure";
 import SensorReadouts from "../../src/components/SensorReadouts";
 import React, { useState } from "react";
-import { View, Text } from "react-native";
+import { View, Text, Platform } from "react-native";
 import {
   Screen,
   Section,
@@ -148,8 +148,11 @@ export default function Activity() {
           />
         </Disclosure>
         <Label muted>
-          Seguimiento en primer plano. Al salir de la app, se detiene y conserva
-          la actividad.
+          {t.backgroundEnabled
+            ? Platform.OS === "android"
+              ? "GPS y sensores disponibles siguen durante la actividad mediante servicios Android con notificación. Permite actividad física y ubicación. Cerrar la app por completo o restringir la batería puede detener el registro."
+              : "GPS continúa al bloquear el teléfono. En iPhone, los pasos de la sesión se recuperan al volver. Los otros sensores se pausan en segundo plano. Si cierras la app por completo, el sistema puede detener la ruta."
+            : "Segundo plano requiere una compilación propia y permiso de ubicación Siempre. En Expo Go, la actividad se conserva al salir, pero el seguimiento se detiene."}
         </Label>
       </Section>
       <Divider />

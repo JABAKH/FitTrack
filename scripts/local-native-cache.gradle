@@ -1,0 +1,12 @@
+// Keep C++ object paths short on Windows without editing Expo-generated files.
+gradle.beforeProject { project ->
+  if (project.path == ':app') {
+    project.pluginManager.withPlugin('com.android.application') {
+      def android = project.extensions.getByName('android')
+      def userProfile = System.getenv('USERPROFILE')
+      if (userProfile != null) {
+        android.externalNativeBuild.cmake.buildStagingDirectory = new File(userProfile, '.fittrack-cxx')
+      }
+    }
+  }
+}

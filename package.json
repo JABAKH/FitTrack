@@ -25,6 +25,7 @@
     "expo-secure-store": "~57.0.4",
     "expo-sensors": "~57.0.3",
     "expo-status-bar": "~57.0.1",
+    "expo-task-manager": "~57.0.21",
     "expo-web-browser": "~57.0.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -36,6 +37,7 @@
     "react-native-svg": "15.15.4",
     "react-native-url-polyfill": "^4.0.0",
     "react-native-web": "^0.21.2",
+    "react-native-webview": "13.16.1",
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
@@ -51,13 +53,14 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/domain.test.ts",
+    "test": "tsx --test tests/*.test.ts",
     "test:database": "tsx tests/database.ts",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "apk:local": "node scripts/build-android-local.cjs"
   },
   "private": true
 }

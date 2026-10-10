@@ -1,6 +1,25 @@
+import * as Notifications from "expo-notifications";
+import {
+  androidSensorsAvailable,
+  startAndroidSensors,
+  stopAndroidSensors,
+  readAndroidSensors,
+} from "../services/androidSensors";
+import {
+  backgroundAvailable,
+  saveBackgroundSession,
+  readBackgroundSession,
+  clearBackgroundSession,
+  startBackgroundLocation,
+  stopBackgroundLocation,
+  hasBackgroundLocation,
+  saveBackgroundSteps,
+  readBackgroundSteps,
+  clearBackgroundSteps,
+} from "../services/backgroundTracking";
 import type { SensorReadings } from "../lib/sensors";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Platform } from "react-native";
+import { AppState, Platform, Alert } from "react-native";
 import { Accelerometer, Gyroscope, Barometer, Pedometer } from "expo-sensors";
 import * as Location from "expo-location";
 import * as Crypto from "expo-crypto";
@@ -27,6 +46,7 @@ export function useTracking() {
     uid = session?.user.id;
   const [status, setStatus] = useState<Record<string, string>>({}),
     [running, setRunning] = useState(false),
+    [backgroundEnabled, setBackgroundEnabled] = useState(false),
     [seconds, setSeconds] = useState(0),
     [distance, setDistance] = useState(0),
     [steps, setSteps] = useState<number | null>(null),
@@ -35,6 +55,10 @@ export function useTracking() {
     [busy, setBusy] = useState(false),
     [liveRoute, setLiveRoute] = useState<Point[]>([]),
     [readings, setReadings] = useState<SensorReadings>({});
+  const stopping = useRef(false);
+  const backgroundRef = useRef(false),
+    stepOffset = useRef(0),
+    lastWatcherSteps = useRef(0);
   const active = useRef(false),
     kind = useRef<"walk" | "run">("walk"),
     startTime = useRef(0),
@@ -80,6 +104,169 @@ export function useTracking() {
         .catch(setError);
     return cleanup;
   }, [uid, probe, cleanup]);
+  const restoreBackground = useCallback(async () => {
+    const value = await readBackgroundSession();
+    if (!value || value.userId !== uid) return;
+    id.current = value.id;
+    kind.current = value.kind;
+    startTime.current = value.startTime;
+    route.current = value.route;
+    meters.current = value.distance;
+    setLiveRoute(value.route);
+    setDistance(value.distance);
+    setSeconds(Math.floor((Date.now() - value.startTime) / 1000));
+    if (value.gps)
+      setReadings((previous) => ({
+        ...previous,
+        gps: { ...value.gps!.coords, receivedAt: value.gps!.timestamp },
+      }));
+    const native = await readAndroidSensors(value.id);
+    if (native) {
+      count.current = native.steps;
+      setSteps(native.steps);
+      setReadings((previous) => ({
+        ...previous,
+        ...(native.accelerometer
+          ? { accelerometer: native.accelerometer }
+          : {}),
+        ...(native.gyroscope ? { gyroscope: native.gyroscope } : {}),
+        ...(native.barometer ? { barometer: native.barometer } : {}),
+      }));
+      const live = native.running && Date.now() - native.heartbeat < 10000;
+      setStatus((previous) => ({
+        ...previous,
+        Acelerómetro: !native.available.accelerometer
+          ? "No disponible"
+          : live
+            ? "Activo · servicio Android"
+            : "Servicio detenido",
+        Giroscopio: !native.available.gyroscope
+          ? "No disponible"
+          : live
+            ? "Activo · servicio Android"
+            : "Servicio detenido",
+        Barómetro: !native.available.barometer
+          ? "No disponible"
+          : live
+            ? "Activo · servicio Android"
+            : "Servicio detenido",
+        Podómetro: !native.available.steps
+          ? "No disponible"
+          : live
+            ? "Activo · segundo plano"
+            : "Servicio detenido",
+      }));
+      await saveBackgroundSteps(value.id, native.steps);
+    }
+    if (value.error) {
+      setError(new Error(value.error));
+      setStatus((previous) => ({
+        ...previous,
+        GPS: "Interrumpido por el sistema",
+      }));
+    } else if (value.gps)
+      setStatus((previous) => ({
+        ...previous,
+        GPS:
+          value.gps!.coords.accuracy === null ||
+          value.gps!.coords.accuracy! > 50
+            ? "Activo · señal imprecisa"
+            : "Activo · segundo plano",
+      }));
+  }, [uid]);
+  const reconcileSteps = useCallback(async () => {
+    if (Platform.OS !== "ios" || count.current === null || !startTime.current)
+      return;
+    try {
+      const result = await Pedometer.getStepCountAsync(
+        new Date(startTime.current),
+        new Date(),
+      );
+      count.current = Math.max(count.current, result.steps);
+      stepOffset.current = Math.max(
+        0,
+        count.current - lastWatcherSteps.current,
+      );
+      setSteps(count.current);
+      if (backgroundRef.current)
+        await saveBackgroundSteps(id.current, count.current);
+    } catch {
+      setStatus((previous) => ({
+        ...previous,
+        Podómetro: "No se pudieron recuperar los pasos en segundo plano",
+      }));
+    }
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const value = await readBackgroundSession();
+      if (!value || !alive) return;
+      if (value.userId !== uid) {
+        await stopBackgroundLocation();
+        await clearBackgroundSession(value.id);
+        return;
+      }
+      await restoreBackground();
+      count.current = androidSensorsAvailable()
+        ? ((await readAndroidSensors(value.id))?.steps ?? null)
+        : await readBackgroundSteps(value.id);
+      setSteps(count.current);
+      if (await hasBackgroundLocation()) {
+        active.current = true;
+        backgroundRef.current = true;
+        setBackgroundEnabled(true);
+        setRunning(true);
+        setStatus((previous) => ({
+          ...previous,
+          GPS: "Activo · segundo plano",
+          Podómetro:
+            Platform.OS === "ios"
+              ? "Recuperando pasos de la sesión"
+              : "Lectura en primer plano",
+        }));
+        await reconcileSteps();
+      } else {
+        const lastTime = value.gps?.timestamp ?? value.startTime;
+        const pending: Draft = {
+          id: value.id,
+          kind: value.kind,
+          started_at: new Date(value.startTime).toISOString(),
+          ended_at: new Date(lastTime).toISOString(),
+          duration_seconds: Math.max(
+            0,
+            Math.floor((lastTime - value.startTime) / 1000),
+          ),
+          distance_m: Math.round(value.distance),
+          steps: count.current,
+          route: value.route,
+        };
+        await AsyncStorage.setItem(
+          "activity-draft:" + uid,
+          JSON.stringify(pending),
+        );
+        setDraft(pending);
+        await clearBackgroundSession(value.id);
+        await clearBackgroundSteps(value.id);
+        setError(
+          new Error(
+            "El sistema detuvo el seguimiento. Tu recorrido quedó pendiente de guardar.",
+          ),
+        );
+      }
+    })().catch(setError);
+    return () => {
+      alive = false;
+    };
+  }, [uid, restoreBackground, reconcileSteps]);
+  useEffect(() => {
+    if (!running || !backgroundEnabled) return;
+    const timer = setInterval(() => {
+      if (AppState.currentState === "active")
+        void restoreBackground().catch(setError);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [running, backgroundEnabled, restoreBackground]);
   const buildDraft = useCallback((): Draft => {
     return {
       id: id.current,
@@ -93,32 +280,88 @@ export function useTracking() {
     };
   }, []);
   const stop = useCallback(async () => {
-    if (!active.current) return;
-    active.current = false;
-    cleanup();
-    setRunning(false);
-    setStatus((s) =>
-      Object.fromEntries(
-        Object.entries(s).map(([k, v]) => [
-          k,
-          v.startsWith("Activo") ? "Detenido" : v,
-        ]),
-      ),
-    );
-    const value = buildDraft();
-    setDraft(value);
-    if (uid)
-      await AsyncStorage.setItem(
-        `activity-draft:${uid}`,
-        JSON.stringify(value),
+    if (!active.current || stopping.current) return;
+    stopping.current = true;
+    try {
+      if (backgroundRef.current) {
+        await stopAndroidSensors();
+        await stopBackgroundLocation();
+        await restoreBackground();
+      }
+      await reconcileSteps();
+      active.current = false;
+      cleanup();
+      setRunning(false);
+      setStatus((s) =>
+        Object.fromEntries(
+          Object.entries(s).map(([k, v]) => [
+            k,
+            v.startsWith("Activo") ? "Detenido" : v,
+          ]),
+        ),
       );
-  }, [uid, cleanup, buildDraft]);
+      const value = buildDraft();
+      setSeconds(value.duration_seconds);
+      setDraft(value);
+      if (uid)
+        await AsyncStorage.setItem(
+          `activity-draft:${uid}`,
+          JSON.stringify(value),
+        );
+      if (backgroundRef.current) {
+        await clearBackgroundSession(id.current);
+        await clearBackgroundSteps(id.current);
+      }
+      backgroundRef.current = false;
+      setBackgroundEnabled(false);
+    } finally {
+      stopping.current = false;
+    }
+  }, [uid, cleanup, buildDraft, restoreBackground, reconcileSteps]);
   useEffect(() => {
     const listener = AppState.addEventListener("change", (state) => {
-      if (state !== "active" && active.current) void stop().catch(setError);
+      if (!active.current) return;
+      if (state === "active" && backgroundRef.current) {
+        void restoreBackground()
+          .then(reconcileSteps)
+          .then(() =>
+            setStatus((previous) => ({
+              ...previous,
+              GPS: "Activo · segundo plano",
+              Podómetro:
+                count.current === null
+                  ? previous.Podómetro
+                  : Platform.OS === "ios"
+                    ? "Activo · pasos recuperados"
+                    : "Lectura en primer plano",
+            })),
+          )
+          .catch(setError);
+      } else if (
+        state !== "active" &&
+        backgroundRef.current &&
+        androidSensorsAvailable()
+      ) {
+        setStatus((previous) => ({
+          ...previous,
+          GPS: "Activo · segundo plano",
+        }));
+      } else if (state !== "active" && backgroundRef.current) {
+        setStatus((previous) => ({
+          ...previous,
+          Acelerómetro: "Pausado por el sistema",
+          Giroscopio: "Pausado por el sistema",
+          Barómetro: "Pausado por el sistema",
+          Podómetro:
+            Platform.OS === "ios"
+              ? "Se recuperará al volver"
+              : "Pausado · primer plano",
+          GPS: "Activo · segundo plano",
+        }));
+      } else if (state !== "active") void stop().catch(setError);
     });
     return () => listener.remove();
-  }, [uid, stop]);
+  }, [uid, stop, restoreBackground, reconcileSteps]);
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(
@@ -139,6 +382,38 @@ export function useTracking() {
         throw new Error(
           "Se necesita permiso de ubicación para registrar la ruta.",
         );
+      let useBackground = false;
+      if (await backgroundAvailable()) {
+        if (Platform.OS === "android") {
+          await Notifications.requestPermissionsAsync();
+          const existing = await Location.getBackgroundPermissionsAsync();
+          if (!existing.granted) {
+            const accepted = await new Promise<boolean>((resolve) =>
+              Alert.alert(
+                "Registrar con pantalla bloqueada",
+                "Permite ubicación todo el tiempo para continuar tu ruta. Android puede abrir Ajustes. Verás una notificación mientras el entrenamiento esté activo.",
+                [
+                  {
+                    text: "Cancelar inicio",
+                    onPress: () => resolve(false),
+                  },
+                  { text: "Continuar", onPress: () => resolve(true) },
+                ],
+                { cancelable: false },
+              ),
+            );
+            if (!accepted)
+              throw new Error(
+                "Para el registro en segundo plano, permite ubicación todo el tiempo. Vuelve a iniciar cuando estés listo.",
+              );
+          }
+        }
+        const backgroundPermission =
+          await Location.requestBackgroundPermissionsAsync();
+        useBackground = backgroundPermission.granted;
+      }
+      setBackgroundEnabled(useBackground);
+      backgroundRef.current = useBackground;
       const current = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
@@ -161,6 +436,8 @@ export function useTracking() {
       ];
       setLiveRoute([...route.current]);
       count.current = null;
+      stepOffset.current = 0;
+      lastWatcherSteps.current = 0;
       setDistance(0);
       setSteps(null);
       setSeconds(0);
@@ -247,62 +524,96 @@ export function useTracking() {
           count.current = 0;
           setSteps(0);
           setStatus((s) => ({ ...s, Podómetro: "Activo" }));
-          subs.current.push(
-            Pedometer.watchStepCount(({ steps: n }) => {
-              count.current = n;
-              setSteps(n);
-            }),
-          );
+          if (!androidSensorsAvailable() || !useBackground)
+            subs.current.push(
+              Pedometer.watchStepCount(({ steps: n }) => {
+                lastWatcherSteps.current = n;
+                count.current = Math.max(
+                  count.current ?? 0,
+                  n + stepOffset.current,
+                );
+                setSteps(count.current);
+                if (backgroundRef.current)
+                  void saveBackgroundSteps(id.current, count.current).catch(
+                    setError,
+                  );
+              }),
+            );
         } else setStatus((s) => ({ ...s, Podómetro: "Permiso denegado" }));
       }
-      subs.current.push(
-        await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            distanceInterval: 5,
-            timeInterval: 2000,
-          },
-          (p) => {
-            if (!active.current) return;
-            setReadings((previous) => ({
-              ...previous,
-              gps: { ...p.coords, receivedAt: p.timestamp },
-            }));
-            setStatus((previous) => ({
-              ...previous,
-              GPS:
-                p.coords.accuracy === null || p.coords.accuracy > 50
-                  ? "Activo · señal imprecisa"
-                  : "Activo",
-            }));
-            if (
-              !active.current ||
-              p.coords.accuracy === null ||
-              p.coords.accuracy > 50
-            )
-              return;
-            const point = {
-                latitude: p.coords.latitude,
-                longitude: p.coords.longitude,
-                timestamp: p.timestamp,
-              },
-              prev = route.current.at(-1);
-            if (prev) {
-              const delta = distanceMeters(prev, point),
-                elapsed = (point.timestamp - prev.timestamp) / 1000;
-              if (elapsed <= 0 || delta / elapsed > 15) return;
-              meters.current += delta;
-            }
-            route.current.push(point);
-            setLiveRoute([...route.current]);
-            setDistance(meters.current);
-            setStatus((s) => ({ ...s, GPS: "Activo" }));
-          },
-        ),
-      );
+      if (useBackground && uid) {
+        await saveBackgroundSession({
+          id: id.current,
+          userId: uid,
+          kind: kind.current,
+          startTime: startTime.current,
+          route: route.current,
+          distance: 0,
+          gps: current,
+        });
+        await saveBackgroundSteps(id.current, count.current);
+        await startBackgroundLocation();
+        await startAndroidSensors(id.current);
+        setStatus((previous) => ({
+          ...previous,
+          GPS: "Activo · segundo plano",
+        }));
+      } else
+        subs.current.push(
+          await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.High,
+              distanceInterval: 5,
+              timeInterval: 2000,
+            },
+            (p) => {
+              if (!active.current) return;
+              setReadings((previous) => ({
+                ...previous,
+                gps: { ...p.coords, receivedAt: p.timestamp },
+              }));
+              setStatus((previous) => ({
+                ...previous,
+                GPS:
+                  p.coords.accuracy === null || p.coords.accuracy > 50
+                    ? "Activo · señal imprecisa"
+                    : "Activo",
+              }));
+              if (
+                !active.current ||
+                p.coords.accuracy === null ||
+                p.coords.accuracy > 50
+              )
+                return;
+              const point = {
+                  latitude: p.coords.latitude,
+                  longitude: p.coords.longitude,
+                  timestamp: p.timestamp,
+                },
+                prev = route.current.at(-1);
+              if (prev) {
+                const delta = distanceMeters(prev, point),
+                  elapsed = (point.timestamp - prev.timestamp) / 1000;
+                if (elapsed <= 0 || delta / elapsed > 15) return;
+                meters.current += delta;
+              }
+              route.current.push(point);
+              setLiveRoute([...route.current]);
+              setDistance(meters.current);
+              setStatus((s) => ({ ...s, GPS: "Activo" }));
+            },
+          ),
+        );
       active.current = true;
       setRunning(true);
     } catch (e) {
+      if (backgroundRef.current) {
+        await stopAndroidSensors().catch(() => {});
+        await stopBackgroundLocation().catch(() => {});
+        await clearBackgroundSession(id.current).catch(() => {});
+      }
+      backgroundRef.current = false;
+      setBackgroundEnabled(false);
       cleanup();
       setStatus((previous) =>
         Object.fromEntries(
@@ -362,6 +673,7 @@ export function useTracking() {
   }
   return {
     readings,
+    backgroundEnabled,
     route: draft?.route ?? liveRoute,
     status,
     running,

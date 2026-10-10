@@ -1,3 +1,4 @@
+import "../src/services/backgroundTracking";
 import CoachNotifications from "../src/components/CoachNotifications";
 import { useRows } from "../src/hooks/useData";
 import { View } from "react-native";

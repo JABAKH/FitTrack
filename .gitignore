@@ -39,8 +39,19 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+**/build/
+**/.gradle/
+**/.cxx/
+local.properties
 
 .env
 .env.local
 .env.*.local
 supabase/.temp/
+
+credentials.json
+.local-signing/
+
+credentials/
+
+builds/

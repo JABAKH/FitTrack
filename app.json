@@ -18,7 +18,16 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.fittrack.mobile"
+      "package": "com.fittrack.mobile",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,7 +44,11 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "FitTrack usa tu ubicación para registrar rutas durante tus actividades."
+          "locationWhenInUsePermission": "FitTrack usa tu ubicación para registrar rutas durante tus actividades.",
+          "locationAlwaysAndWhenInUsePermission": "FitTrack registra la ruta de tu entrenamiento aunque bloquees el teléfono. Solo durante una actividad iniciada por ti.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       "expo-notifications",
@@ -49,6 +62,13 @@
       "@react-native-community/datetimepicker"
     ],
     "scheme": "fittrack",
-    "backgroundColor": "#080D1B"
+    "backgroundColor": "#080D1B",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "49e52765-4b47-4472-a6b1-473f67a1d79c"
+      }
+    },
+    "owner": "mikis142"
   }
 }
